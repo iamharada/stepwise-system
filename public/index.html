@@ -1,0 +1,968 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>LLMを活用したプログラミング学習支援システム</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.11/codemirror.min.css">
+  <style>
+    body { font-family: 'Inter','Noto Sans JP',sans-serif; }
+    .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #2d3748; color: #fff; padding: 10px 20px; border-radius: 8px; z-index: 1000; opacity: 0; transition: opacity .25s; }
+    .toast.show { opacity: 1; }
+    .advice-item { animation: fadeIn .35s forwards; opacity: 0; transform: translateY(2px); }
+    @keyframes fadeIn { to { opacity: 1; transform: translateY(0); } }
+    
+    #code-editor-container {
+      min-height: 20rem;
+      max-height: 30rem;
+      overflow-y: auto;
+      font-family: 'Fira Code','Noto Sans JP',monospace;
+      font-size: 14px;
+      border-radius: .375rem;
+      border: 1px solid #d1d5db;
+    }
+    
+    .cm-editor {
+      height: 100% !important;
+    }
+
+    .task-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 1rem;
+        margin-bottom: 1rem;
+    }
+    .task-table th, .task-table td {
+        padding: 0.75rem 1.5rem;
+        border: 1px solid #e2e8f0;
+        text-align: left;
+    }
+    .task-table th {
+        background-color: #f7fafc;
+        font-weight: 600;
+        color: #4a5568;
+    }
+    .task-table tr:nth-child(even) {
+        background-color: #f9f9f9;
+    }
+    #task-description-container h3 {
+        font-size: 1.25rem;
+        font-weight: 600;
+    }
+    #task-description-container h4 {
+        font-size: 1rem;
+        font-weight: 600;
+        margin-top: 1rem;
+        margin-bottom: 0.25rem;
+    }
+    #task-description-container p {
+        font-size: 0.875rem;
+    }
+    .panel {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .panel-content {
+      flex-grow: 1;
+      overflow-y: auto;
+    }
+    .left-panel {
+      height: calc(100vh - 8rem);
+    }
+    .editor-container {
+      flex-grow: 1;
+      min-height: 300px;
+      display: flex;
+      flex-direction: column;
+    }
+  </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+
+<div id="login-screen" class="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50">
+    <div class="bg-white p-8 rounded-lg shadow-xl w-full max-w-sm">
+        <h2 class="text-2xl font-bold text-gray-700 mb-6 text-center">ログイン</h2>
+        <form id="login-form">
+            <div class="mb-4">
+                <label for="username" class="block text-sm font-medium text-gray-700">ユーザー名</label>
+                <input type="text" id="username" name="username" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
+            </div>
+            <div class="mb-6">
+                <label for="password" class="block text-sm font-medium text-gray-700">パスワード</label>
+                <input type="password" id="password" name="password" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
+            </div>
+            <button type="submit" class="w-full bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-indigo-700 transition">ログイン</button>
+        </form>
+    </div>
+</div>
+
+<div id="main-content" class="container mx-auto p-4 max-w-7xl h-screen flex flex-col hidden">
+  <header class="mb-4 flex justify-between items-center">
+    <h1 class="text-2xl font-bold text-gray-700">段階的詳細化プロセス支援システム🥚🐣🐥</h1>
+    <div id="auth-container">
+      <div id="logged-in-view" class="flex items-center space-x-2">
+        <span id="user-display" class="text-sm text-gray-700"></span>
+        <button id="logout-btn" class="bg-gray-400 text-white text-sm py-1 px-3 rounded-md hover:bg-gray-500 transition">ログアウト</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-grow overflow-hidden">
+    <div class="bg-white p-4 rounded-lg shadow-md panel left-panel">
+      <h2 class="text-lg font-semibold mb-2 text-gray-600">コーディング環境</h2>
+      <div class="editor-container">
+        <div id="code-editor-container" class="w-full h-full"></div>
+      </div>
+
+      <div class="mt-4 panel-content">
+        <label for="stdin-input" class="block text-sm font-medium text-gray-700">標準入力</label>
+        <textarea id="stdin-input" class="w-full p-2 border rounded-md text-sm" rows="3" placeholder="ここに実行時の入力（例）5 10"></textarea>
+
+        <div class="mt-4 grid grid-cols-2 gap-2">
+          <button id="compile-code-btn" class="w-full bg-gray-400 text-white py-2 px-4 rounded-md hover:bg-gray-500 transition">コンパイル</button>
+          <button id="run-code-btn" class="w-full bg-gray-600 text-white py-2 px-4 rounded-md hover:bg-gray-700 transition">実行</button>
+        </div>
+
+        <div id="compile-result" class="mt-4 p-4 bg-gray-800 text-gray-100 rounded-lg hidden">
+          <h3 class="font-semibold text-gray-200 mb-2">コンパイル結果</h3>
+          <pre id="c-stdout" class="text-xs whitespace-pre-wrap break-words overflow-auto max-h-64"></pre>
+          <pre id="c-stderr" class="text-xs text-red-400 mt-2 whitespace-pre-wrap break-words overflow-auto max-h-64"></pre>
+        </div>
+
+        <div id="execution-result" class="mt-4 p-4 bg-gray-800 text-gray-100 rounded-lg hidden">
+          <h3 class="font-semibold text-gray-200 mb-2">実行結果</h3>
+          <pre id="stdout" class="text-xs whitespace-pre-wrap break-words overflow-auto max-h-64"></pre>
+          <pre id="stderr" class="text-xs text-red-400 mt-2 whitespace-pre-wrap break-words overflow-auto max-h-64"></pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex flex-col gap-6 panel-content">
+      <div class="bg-white p-4 rounded-lg shadow-md">
+        <div class="flex items-center space-x-2">
+          <h2 class="text-lg font-semibold text-gray-600">課題</h2>
+          <select id="task-selector" class="block w-24 rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 text-sm">
+            </select>
+        </div>
+        <div id="task-description-container" class="mt-2 text-sm">
+          <p id="task-description" class="text-sm">課題を読み込み中...</p>
+        </div>
+      </div>
+
+      <div class="bg-white p-4 rounded-lg shadow-md">
+        <h2 class="text-lg font-semibold mb-2 text-gray-600">学習プロセス</h2>
+        <div id="learning-process" class="flex items-center justify-around text-sm">
+          <div class="process-step" data-step="課題の理解">
+            <span class="bg-gray-200 text-gray-700 font-bold py-1 px-3 rounded-full">1. 理解</span>
+          </div>
+          <span class="text-gray-400 font-bold">&gt;</span>
+          <div class="process-step" data-step="処理の大枠決定 処理の詳細化 コード化">
+            <span class="bg-gray-200 text-gray-700 font-bold py-1 px-3 rounded-full">2. 構想・実装</span>
+          </div>
+          <span class="text-gray-400 font-bold">&gt;</span>
+          <div class="process-step" data-step="コードの整合性確認">
+            <span class="bg-gray-200 text-gray-700 font-bold py-1 px-3 rounded-full">3. 検証</span>
+          </div>
+        </div>
+        <p class="text-center text-xs mt-2 text-gray-500">現在: <span id="current-phase" class="font-semibold">---</span></p>
+      </div>
+
+      <div class="bg-white p-4 rounded-lg shadow-md">
+        <h2 class="text-lg font-semibold mb-2 text-gray-600">処理構造</h2>
+        <div id="processing-structure" class="text-sm space-y-1">
+          <p class="text-gray-400">AI HELPを押して構造を分析</p>
+        </div>
+      </div>
+
+      <div class="bg-white p-4 rounded-lg shadow-md">
+        <button id="ai-help-btn" class="w-full bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-bold py-3 px-4 rounded-lg hover:from-purple-600 hover:to-indigo-700 transition shadow-lg">
+          AI HELP
+        </button>
+        <div id="ai-advice-container" class="mt-4 p-4 bg-purple-50 border-l-4 border-purple-400 rounded-r-lg hidden">
+          <h3 class="font-bold text-purple-800">ヒント</h3>
+          <div id="advice-list" class="space-y-3 mt-2"></div>
+          <div class="mt-4 text-center">
+            <button id="show-next-advice-btn" class="bg-purple-600 text-white font-bold py-2 px-4 rounded-lg hidden hover:bg-purple-700 transition">
+              次のヒントを見る
+            </button>
+          </div>
+        </div>
+        <div id="loader-container" class="mt-4 flex justify-center items-center hidden">
+          <div class="loader"></div>
+          <p class="ml-3 text-gray-500">AIが分析中です...</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast-notification" class="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.11/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.11/mode/clike/clike.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.11/addon/edit/matchbrackets.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.11/addon/selection/active-line.min.js"></script>
+
+<script>
+  /***********************
+   * 設定
+   ***********************/
+  const TOTAL_TASKS = 111;
+
+  /***********************
+   * DOM
+   ***********************/
+  const loginScreen = document.getElementById('login-screen');
+  const mainContent = document.getElementById('main-content');
+  const loginForm = document.getElementById('login-form');
+  const loggedOutView = document.getElementById('logged-out-view');
+  const loggedInView = document.getElementById('logged-in-view');
+  const logoutBtn = document.getElementById('logout-btn');
+  const userDisplay = document.getElementById('user-display');
+
+  const compileBtn = document.getElementById('compile-code-btn');
+  const runBtn = document.getElementById('run-code-btn');
+  const executionResultDiv = document.getElementById('execution-result');
+  const stdoutPre = document.getElementById('stdout');
+  const stderrPre = document.getElementById('stderr');
+  const compileResultDiv = document.getElementById('compile-result');
+  const cStdoutPre = document.getElementById('c-stdout');
+  const cStderrPre = document.getElementById('c-stderr');
+  const stdinInput = document.getElementById('stdin-input');
+
+  const aiHelpBtn = document.getElementById('ai-help-btn');
+  const aiAdviceContainer = document.getElementById('ai-advice-container');
+  const adviceList = document.getElementById('advice-list');
+  const showNextAdviceBtn = document.getElementById('show-next-advice-btn');
+  const loaderContainer = document.getElementById('loader-container');
+  const processingStructure = document.getElementById('processing-structure');
+  const currentPhaseEl = document.getElementById('current-phase');
+
+  const taskSelector = document.getElementById('task-selector');
+  const taskDescriptionContainer = document.getElementById('task-description-container');
+  const taskTitleEl = document.querySelector('.bg-white.p-4.rounded-lg.shadow-md h2');
+
+  /***********************
+   * 認証ロジック
+   ***********************/
+  let currentUser = null;
+  let currentTaskNumber = 1;
+  let editor = null;
+  let lastSavedCode = "";
+
+  async function checkSession() {
+    try {
+      const resp = await fetch('/session', {credentials: 'include'});
+      if (resp.ok) {
+        const data = await resp.json();
+        currentUser = data.user;
+        if (data.user.taskNumber) {
+          currentTaskNumber = data.user.taskNumber;
+          taskSelector.value = currentTaskNumber;
+        }
+        updateUI();
+        await loadTaskAndCode(currentTaskNumber);
+      } else {
+        currentUser = null;
+        updateUI();
+        await loadTaskAndCode(currentTaskNumber);
+      }
+    } catch (e) {
+      console.error('セッションチェック失敗:', e);
+      currentUser = null;
+      updateUI();
+      await loadTaskAndCode(currentTaskNumber);
+    }
+  }
+
+  function updateUI() {
+    if (currentUser) {
+      loginScreen.classList.add('hidden');
+      mainContent.classList.remove('hidden');
+      userDisplay.textContent = `${currentUser.username} さん`;
+      enableActions();
+    } else {
+      loginScreen.classList.remove('hidden');
+      mainContent.classList.add('hidden');
+      userDisplay.textContent = '';
+      disableActions();
+    }
+  }
+
+  function disableActions() {
+    compileBtn.disabled = true;
+    runBtn.disabled = true;
+    aiHelpBtn.disabled = true;
+    compileBtn.classList.add('opacity-50', 'cursor-not-allowed');
+    runBtn.classList.add('opacity-50', 'cursor-not-allowed');
+    aiHelpBtn.classList.add('opacity-50', 'cursor-not-allowed');
+  }
+
+  function enableActions() {
+    compileBtn.disabled = false;
+    runBtn.disabled = false;
+    aiHelpBtn.disabled = false;
+    compileBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+    runBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+    aiHelpBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+  }
+
+  loginForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const username = document.getElementById('username').value;
+    const password = document.getElementById('password').value;
+    try {
+      await fetch('/logout', { method: 'POST', credentials: 'include' });
+
+      const resp = await fetch('/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+        credentials: 'include'
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        currentUser = data.user;
+        showToast('ログイン成功');
+        updateUI();
+        await loadTaskAndCode(currentTaskNumber);
+      } else {
+        const errData = await resp.json();
+        showToast(errData.message || 'ログイン失敗', 'error');
+      }
+    } catch (e) {
+      showToast('ログインリクエスト失敗', 'error');
+    }
+  });
+
+  logoutBtn.addEventListener('click', async () => {
+    try {
+      await fetch('/logout', { method: 'POST', credentials: 'include' });
+      showToast('ログアウト成功');
+      currentUser = null;
+      updateUI();
+      // ログアウト時も現在の課題のコードを初期コードにリセット
+      await loadTaskAndCode(currentTaskNumber); 
+    } catch (e) {
+      showToast('ログアウト失敗', 'error');
+    }
+  });
+
+  async function saveSessionState() {
+    if (!currentUser || !editor) return;
+
+    const currentCode = editor.getValue();
+    if (currentCode === lastSavedCode) {
+      return;
+    }
+
+    const state = {
+      timestamp: new Date().toISOString(),
+      username: currentUser.username,
+      userId: currentUser.userId,
+      taskNumber: currentTaskNumber,
+      event: 'auto_save',
+      code: currentCode,
+    };
+    
+    const key = `task_${currentTaskNumber}/${state.timestamp}_${state.event}.json`;
+
+    await fetch('/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, body: JSON.stringify(state) }),
+      credentials: 'include'
+    });
+    
+    lastSavedCode = currentCode;
+  }
+
+  // 自動保存の間隔は10秒
+  setInterval(saveSessionState, 10000);
+
+  /***********************
+   * 課題データと読み込みロジック
+   ***********************/
+  function loadTask(taskNumber) {
+    const paddedNumber = String(taskNumber).padStart(3, '0');
+    const filePath = `tasks/${paddedNumber}.md`;
+    taskDescriptionContainer.innerHTML = `<p class="text-gray-500">課題を読み込み中...</p>`;
+
+    fetch(filePath)
+      .then(response => {
+        if (!response.ok) {
+          throw new Error('課題ファイルが見つかりません');
+        }
+        return response.text();
+      })
+      .then(markdownContent => {
+        taskDescriptionContainer.innerHTML = '';
+        const lines = markdownContent.split('\n');
+        let inTable = false;
+        let tableHeaderContent = '';
+        let tableBodyContent = '';
+        
+        lines.forEach(line => {
+          if (line.trim().startsWith('###')) {
+            const title = line.substring(4).trim();
+            taskTitleEl.textContent = "課題";
+            const h3 = document.createElement('h3');
+            h3.className = 'text-lg font-semibold mb-2';
+            h3.textContent = title;
+            taskDescriptionContainer.appendChild(h3);
+          } else if (line.trim().startsWith('####')) {
+            const h4 = document.createElement('h4');
+            h4.className = 'text-base font-semibold mt-4 mb-1';
+            h4.textContent = line.substring(5).trim();
+            taskDescriptionContainer.appendChild(h4);
+            inTable = false;
+          } else if (line.trim().startsWith('|')) {
+            const cols = line.split('|').slice(1, -1).map(col => col.trim());
+            if (cols.length === 0) return;
+            if (!inTable) {
+                inTable = true;
+                tableHeaderContent = '';
+                tableBodyContent = '';
+                tableHeaderContent += `<tr>${cols.map(text => `<th class="px-6 py-3 whitespace-nowrap text-sm text-gray-500">${text}</th>`).join('')}</tr>`;
+            } else if (lines[lines.indexOf(line) - 1].includes('---')) {
+                tableBodyContent += `<tr class="bg-white even:bg-gray-50">${cols.map(text => `<td class="px-6 py-3 whitespace-nowrap text-sm text-gray-500">${text.replace(/<br>/g, '<br/>')}</td>`).join('')}</tr>`;
+            }
+          } else if (inTable && line.trim() === '') {
+            inTable = false;
+            const tableHTML = `<div class="overflow-x-auto"><table class="task-table"><thead>${tableHeaderContent}</thead><tbody>${tableBodyContent}</tbody></table></div>`;
+            taskDescriptionContainer.insertAdjacentHTML('beforeend', tableHTML);
+            tableHeaderContent = '';
+            tableBodyContent = '';
+          } else if (line.trim() !== '') {
+            const p = document.createElement('p');
+            p.className = 'my-1 text-sm';
+            p.innerHTML = line.replace(/<br>/g, '<br/>');
+            taskDescriptionContainer.appendChild(p);
+            inTable = false;
+          }
+        });
+        
+        if(inTable) {
+            const tableHTML = `<div class="overflow-x-auto"><table class="task-table"><thead>${tableHeaderContent}</thead><tbody>${tableBodyContent}</tbody></table></div>`;
+            taskDescriptionContainer.insertAdjacentHTML('beforeend', tableHTML);
+        }
+      })
+      .catch(error => {
+        console.error('課題の読み込みに失敗しました:', error);
+        taskDescriptionContainer.innerHTML = `<p class="text-red-500">課題を読み込みに失敗しました。ファイルがサーバーに存在するか、またはファイルパスが正しいか確認してください。</p>`;
+      });
+  }
+
+  function initializeTaskSelector() {
+    for (let i = 1; i <= TOTAL_TASKS; i++) {
+      const option = document.createElement('option');
+      option.value = i;
+      option.textContent = `課題 ${i}`;
+      taskSelector.appendChild(option);
+    }
+    taskSelector.addEventListener('change', async (event) => {
+      currentTaskNumber = event.target.value;
+      if (currentUser) {
+          // 課題番号をサーバーセッションに保存
+          await fetch('/set-task', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ taskNumber: currentTaskNumber }),
+              credentials: 'include'
+          });
+      }
+      // 課題番号の変更時に、文章とコードをロード
+      await loadTaskAndCode(currentTaskNumber);
+    });
+  }
+
+  window.addEventListener('DOMContentLoaded', () => {
+    initializeTaskSelector();
+    checkSession();
+  });
+
+  const initialCode = `#include <stdio.h>
+
+int main(void) {
+    /*入力:○○, 出力:△△*/
+
+    return 0;
+}`;
+
+  async function loadTaskAndCode(taskNumber) {
+    // 1. 課題の文章をロード（非同期）
+    loadTask(taskNumber);
+    
+    // 2. コードロードのロジック
+    let codeToLoad = initialCode;
+    if (currentUser) {
+      try {
+        const resp = await fetch(`/load_latest_code?taskNumber=${taskNumber}`, {credentials: 'include'});
+        if (resp.ok) {
+          const data = await resp.json();
+          codeToLoad = data.code;
+          lastSavedCode = codeToLoad;
+          showToast('最新のコードをロードしました。');
+        } else if (resp.status === 404) {
+           // ログファイルがない場合
+          lastSavedCode = initialCode;
+          showToast('保存されたコードが見つかりません。初期コードをロードします。');
+        } else {
+           // その他エラーの場合
+           lastSavedCode = initialCode;
+        }
+      } catch (e) {
+        console.error('コードロード中にエラー:', e);
+        showToast('コードのロード中にエラーが発生しました。', 'error');
+        lastSavedCode = initialCode;
+      }
+    } else {
+      // 未ログインの場合は初期コード
+      lastSavedCode = initialCode;
+    }
+    
+    // 3. 決定したコードでエディタを再初期化
+    initializeEditor(codeToLoad);
+  }
+
+  function initializeEditor(codeValue = initialCode) {
+    const editorContainer = document.getElementById('code-editor-container');
+    
+    // 既存のエディタインスタンスがあれば確実に破棄する
+    if (editor) {
+      // CodeMirrorのエディタ要素自体を削除
+      const cmElement = editor.getWrapperElement();
+      if (cmElement && cmElement.parentNode === editorContainer) {
+        editorContainer.removeChild(cmElement);
+      }
+      editor = null;
+    }
+
+    // コンテナをクリア（万が一残っている要素があれば削除）
+    editorContainer.innerHTML = '';
+
+    // 新しいCodeMirrorインスタンスを生成
+    editor = CodeMirror(editorContainer, {
+      value: codeValue,
+      mode: 'text/x-csrc',
+      lineNumbers: true,
+      matchBrackets: true,
+      styleActiveLine: true,
+      theme: 'default',
+      indentUnit: 4,
+      indentWithTabs: false,
+      smartIndent: true,
+      extraKeys: {
+        "Tab": function(cm) {
+          if (cm.somethingSelected()) {
+            cm.indentSelection("add");
+          } else {
+            cm.replaceSelection(" ".repeat(cm.getOption("indentUnit")));
+          }
+        },
+        "Shift-Tab": function(cm) {
+          cm.indentSelection("subtract");
+        }
+      }
+    });
+    
+    // CodeMirrorをリフレッシュして正しく描画させる
+    editor.refresh();
+  }
+
+  /***********************
+   * Toast
+   ***********************/
+  function showToast(msg, type = 'info') {
+    const t = document.getElementById('toast-notification');
+    t.textContent = msg;
+    t.classList.add('show');
+    t.style.backgroundColor = (type === 'error') ? '#c53030' : '#2d3748';
+    setTimeout(() => t.classList.remove('show'), 2200);
+  }
+
+  /***********************
+   * コンパイル
+   ***********************/
+  async function compileCode() {
+    if (!currentUser) {
+        showToast('コンパイル機能はログインが必要です', 'error');
+        return;
+    }
+    if (!editor) {
+        showToast('エディタが初期化されていません。ログイン後に操作してください。', 'error');
+        return;
+    }
+    const currentCode = editor.getValue();
+    compileResultDiv.classList.remove('hidden');
+    cStdoutPre.textContent = 'コンパイル中...';
+    cStderrPre.textContent = '';
+    
+    try {
+      const resp = await fetch('/run-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language: 'c', code: currentCode, stdin: '', taskNumber: currentTaskNumber }),
+        credentials: 'include'
+      });
+      
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        throw new Error(`HTTP ${resp.status}: ${errData?.error || 'コンパイルに失敗しました'}`);
+      }
+      
+      const data = await resp.json();
+      const cOut = data.compile?.stdout || '(出力なし)';
+      const cErr = data.compile?.stderr || '';
+
+      cStdoutPre.textContent = cOut;
+      cStderrPre.textContent = cErr;
+      
+      if (cErr && cErr.trim().length > 0) {
+        showToast('コンパイルエラーがあります', 'error');
+        runBtn.disabled = true;
+      } else {
+        showToast('コンパイル成功');
+        runBtn.disabled = false;
+      }
+    } catch (e) {
+      cStdoutPre.textContent = '';
+      cStderrPre.textContent = String(e.message || e);
+      showToast('コンパイルでエラーが発生しました', 'error');
+      runBtn.disabled = true;
+    }
+  }
+
+  /***********************
+   * 実行（コンパイル成功が前提）
+   ***********************/
+  async function runCode() {
+    if (!currentUser) {
+        showToast('実行機能はログインが必要です', 'error');
+        return;
+    }
+    if (!editor) {
+        showToast('エディタが初期化されていません。ログイン後に操作してください。', 'error');
+        return;
+    }
+    if (runBtn.disabled) {
+      showToast('先にコンパイルしてください', 'error');
+      return;
+    }
+
+    const currentCode = editor.getValue();
+    const stdinValue = (document.getElementById('stdin-input')?.value ?? '');
+
+    executionResultDiv.classList.remove('hidden');
+    stdoutPre.textContent = '実行中...';
+    stderrPre.textContent = '';
+
+    try {
+      const resp = await fetch('/run-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language: 'c', code: currentCode, stdin: stdinValue, taskNumber: currentTaskNumber }),
+        credentials: 'include'
+      });
+      
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        throw new Error(`HTTP ${resp.status}: ${errData?.error || '実行に失敗しました'}`);
+      }
+      
+      const data = await resp.json();
+
+      stdoutPre.textContent = data.run?.stdout || '(出力なし)';
+      stderrPre.textContent = data.run?.stderr || '';
+
+      showToast('実行完了');
+    } catch (e) {
+      stderrPre.textContent = String(e.message || e);
+      showToast('コード実行でエラーが発生しました', 'error');
+    }
+  }
+
+  /***********************
+   * AI HELP (修正済み)
+   ***********************/
+  async function getTaskText() {
+    return taskDescriptionContainer.textContent;
+  }
+
+  function safeParseJSON(s) {
+    try { return JSON.parse(s); } catch (_) {}
+    const m = s.match(/\{[\s\S]*\}$/);
+    if (m) { try { return JSON.parse(m[0]); } catch (_) {} }
+    throw new Error('JSONパースに失敗しました');
+  }
+
+  const AdviceSchema = {
+    estimated_stage: ['課題の理解','処理の大枠決定','処理の詳細化','コード化','コードの整合性確認'],
+    processing_structure: {
+      status: ['done','in_progress','todo']
+    }
+  };
+
+  function validateAdvice(d) {
+    if (!d || typeof d !== 'object') throw new Error('JSONが空です');
+    if (!AdviceSchema.estimated_stage.includes(d.estimated_stage)) {
+      throw new Error('estimated_stage がスキーマ外です');
+    }
+    if (!Array.isArray(d.processing_structure)) throw new Error('processing_structure が配列ではありません');
+    d.processing_structure.forEach((it, idx) => {
+      if (typeof it.level !== 'number' || it.level < 1) throw new Error(`processing_structure[${idx}].level が不正`);
+      if (typeof it.text !== 'string' || !it.text.trim()) throw new Error(`processing_structure[${idx}].text が不正`);
+      if (!AdviceSchema.processing_structure.status.includes(it.status)) throw new Error(`processing_structure[${idx}].status が不正`);
+    });
+    if (!Array.isArray(d.advice) || d.advice.length === 0) throw new Error('advice が空です');
+    d.advice.forEach((a, i) => {
+      if (typeof a.level !== 'number' || a.level < 1) throw new Error(`advice[${i}].level が不正`);
+      if (typeof a.text !== 'string' || !a.text.trim()) throw new Error(`advice[${i}].text が不正`);
+    });
+  }
+
+  function renderAdvice(list) {
+    const nextBtn = document.getElementById('show-next-advice-btn');
+    adviceList.innerHTML = '';
+    let i = 0;
+    function addOne(idx) {
+      const h = list[idx];
+      const div = document.createElement('div');
+      div.className = 'advice-item p-3 border rounded-lg bg-white shadow-sm';
+      div.innerHTML = `<p class="text-xs font-bold text-gray-500">レベル ${h.level}</p><p class="text-sm text-purple-700 mt-1">${h.text}</p>`;
+      adviceList.appendChild(div);
+    }
+    if (list.length) {
+      addOne(0);
+      i = 1;
+      nextBtn.classList.toggle('hidden', i >= list.length);
+      nextBtn.onclick = () => {
+        if (i < list.length) addOne(i++);
+        nextBtn.classList.toggle('hidden', i >= list.length);
+      };
+    } else {
+      adviceList.innerHTML = '<p class="text-purple-700">有効なアドバイスを取得できませんでした。</p>';
+      nextBtn.classList.add('hidden');
+    }
+  }
+
+  function renderProcessingStructure(structure) {
+    const root = document.getElementById('processing-structure');
+    root.innerHTML = '';
+    if (!structure || !structure.length) {
+      root.innerHTML = '<p class="text-gray-400">構造を抽出できませんでした。</p>';
+      return;
+    }
+
+    structure.forEach(item => {
+      const div = document.createElement('div');
+      div.className = 'flex items-center';
+      div.style.paddingLeft = `${(item.level - 1) * 20}px`;
+      let icon = '';
+      let textClass = 'text-gray-800';
+
+      switch (item.status) {
+        case 'done':
+          icon = '<svg class="w-4 h-4 text-green-500 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path></svg>';
+          textClass = 'text-gray-400 line-through';
+          break;
+        case 'in_progress':
+          icon = '<svg class="w-4 h-4 text-blue-500 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z"></path><path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.022 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd"></path></svg>';
+          textClass = 'text-blue-600 font-semibold';
+          break;
+        default:
+          icon = '<svg class="w-4 h-4 text-gray-400 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>';
+          break;
+      }
+      div.innerHTML = `${icon}<span class="${textClass}">${escapeHtml(item.text)}</span>`;
+      root.appendChild(div);
+    });
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replaceAll('&','&amp;').replaceAll('<','&lt;')
+      .replaceAll('>','&gt;').replaceAll('"','&quot;')
+      .replaceAll("'",'&#39;');
+  }
+
+  const learningProcess = document.getElementById('learning-process');
+
+  function updateProcessVisualizer(stage) {
+    const steps = learningProcess.querySelectorAll('.process-step');
+    steps.forEach(step => {
+        const span = step.querySelector('span');
+        const names = step.dataset.step;
+        span.classList.remove('bg-blue-500','text-white');
+        span.classList.add('bg-gray-200','text-gray-700');
+        if (stage && names.includes(stage)) {
+        span.classList.add('bg-blue-500','text-white');
+        span.classList.remove('bg-gray-200','text-gray-700');
+        }
+    });
+  }
+
+  aiHelpBtn.addEventListener('click', getAIAdvice);
+  
+  async function getAIAdvice() {
+    if (!currentUser) {
+      showToast('AI HELP機能はログインが必要です', 'error');
+      return;
+    }
+    const studentCode = editor.getValue();
+    const task = await getTaskText();
+
+    if (!studentCode.trim()) {
+      showToast('コードを入力してください。', 'error');
+      return;
+    }
+
+    loaderContainer.classList.remove('hidden');
+    aiAdviceContainer.classList.add('hidden');
+    aiHelpBtn.disabled = true;
+    aiHelpBtn.classList.add('opacity-50','cursor-not-allowed');
+
+    try {
+      const resp = await fetch('/ai-advice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task: task, studentCode: studentCode, taskNumber: currentTaskNumber }),
+        credentials: 'include'
+      });
+
+      if (!resp.ok) {
+        const errData = await resp.json();
+        throw new Error(`サーバーエラー: ${errData.error || '不明なエラー'}`);
+      }
+
+      // サーバーから直接パース済みのJSONオブジェクトを受け取る
+      const adviceData = await resp.json(); 
+      
+      if (!adviceData || !adviceData.advice) throw new Error("AIからの応答が不正です。");
+
+      validateAdvice(adviceData);
+
+      renderAdvice(adviceData.advice || []);
+      renderProcessingStructure(adviceData.processing_structure || []);
+      currentPhaseEl.textContent = adviceData.estimated_stage || '---';
+      updateProcessVisualizer(adviceData.estimated_stage);
+      aiAdviceContainer.classList.remove('hidden');
+      showToast('アドバイスを更新しました');
+    } catch (err) {
+      console.error(err);
+      showToast(`AI HELP エラー: ${String(err.message || err)}`, 'error');
+    } finally {
+      loaderContainer.classList.add('hidden');
+      aiHelpBtn.disabled = false;
+      aiHelpBtn.classList.remove('opacity-50','cursor-not-allowed');
+    }
+  }
+
+  /***********************
+   * 実行（コンパイル成功が前提）
+   ***********************/
+  compileBtn.addEventListener('click', compileCode);
+  runBtn.addEventListener('click', runCode);
+
+  async function compileCode() {
+    if (!currentUser) {
+        showToast('コンパイル機能はログインが必要です', 'error');
+        return;
+    }
+    if (!editor) {
+        showToast('エディタが初期化されていません。ログイン後に操作してください。', 'error');
+        return;
+    }
+    const currentCode = editor.getValue();
+    compileResultDiv.classList.remove('hidden');
+    cStdoutPre.textContent = 'コンパイル中...';
+    cStderrPre.textContent = '';
+    
+    try {
+      const resp = await fetch('/run-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language: 'c', code: currentCode, stdin: '', taskNumber: currentTaskNumber }),
+        credentials: 'include'
+      });
+      
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        throw new Error(`HTTP ${resp.status}: ${errData?.error || 'コンパイルに失敗しました'}`);
+      }
+      
+      const data = await resp.json();
+      const cOut = data.compile?.stdout || '(出力なし)';
+      const cErr = data.compile?.stderr || '';
+
+      cStdoutPre.textContent = cOut;
+      cStderrPre.textContent = cErr;
+      
+      if (cErr && cErr.trim().length > 0) {
+        showToast('コンパイルエラーがあります', 'error');
+        runBtn.disabled = true;
+      } else {
+        showToast('コンパイル成功');
+        runBtn.disabled = false;
+      }
+    } catch (e) {
+      cStdoutPre.textContent = '';
+      cStderrPre.textContent = String(e.message || e);
+      showToast('コンパイルでエラーが発生しました', 'error');
+      runBtn.disabled = true;
+    }
+  }
+
+  async function runCode() {
+    if (!currentUser) {
+        showToast('実行機能はログインが必要です', 'error');
+        return;
+    }
+    if (!editor) {
+        showToast('エディタが初期化されていません。ログイン後に操作してください。', 'error');
+        return;
+    }
+    if (runBtn.disabled) {
+      showToast('先にコンパイルしてください', 'error');
+      return;
+    }
+
+    const currentCode = editor.getValue();
+    const stdinValue = (document.getElementById('stdin-input')?.value ?? '');
+
+    executionResultDiv.classList.remove('hidden');
+    stdoutPre.textContent = '実行中...';
+    stderrPre.textContent = '';
+
+    try {
+      const resp = await fetch('/run-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language: 'c', code: currentCode, stdin: stdinValue, taskNumber: currentTaskNumber }),
+        credentials: 'include'
+      });
+      
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        throw new Error(`HTTP ${resp.status}: ${errData?.error || '実行に失敗しました'}`);
+      }
+      
+      const data = await resp.json();
+
+      stdoutPre.textContent = data.run?.stdout || '(出力なし)';
+      stderrPre.textContent = data.run?.stderr || '';
+
+      showToast('実行完了');
+    } catch (e) {
+      stderrPre.textContent = String(e.message || e);
+      showToast('コード実行でエラーが発生しました', 'error');
+    }
+  }
+</script>
+</body>
+</html>

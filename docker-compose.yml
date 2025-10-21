@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  app:
+    # ... (build, container_name は変更なし) ...
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: node-server-app
+    ports:
+      - "3000:3000"
+      
+    # 🚨 追加: .env ファイルから環境変数をロード
+    env_file:
+      - .env
+      
+    # environment セクションは不要になりましたが、
+    # 特定の値だけ上書きしたい場合は残せます。
+    # 今回は全て.envに任せるため、environmentセクションは削除または空にします。
+    # environment:
+      # - PORT=3000 # .envから読み込むため削除
+      
+    volumes:
+      - .:/usr/src/app
+      - /usr/src/app/node_modules 
+    restart: always
