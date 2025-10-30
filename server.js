@@ -1,8 +1,3 @@
-// server.js
-// プロンプトを外部ファイルに分離し、呼び出し時に読み込むようにすることで、
-// プロンプトの更新を容易にし、サーバーの再起動なしで変更を反映できるようにした。
-// 本番環境では、事前にプロンプトファイルを読み込んでおく方法（server_honbann.js）を採用する。
-
 const express = require('express');
 const AWS = require('aws-sdk');
 const fetch = require('node-fetch');
@@ -13,22 +8,24 @@ const fs = require('fs');
 const bcrypt = require('bcrypt');
 const fsPromises = require('fs/promises'); // fs/promises をインポート
 
+// ★ dotenvを読み込み、.envファイルの内容をprocess.envにロード
 require('dotenv').config(); 
 
 const app = express();
 const port = 3000;
 
-// S3とAWSの環境設定
+// S3とAWSの環境設定をprocess.envから取得
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const S3_BUCKET_NAME = process.env.S3_BUCKET_NAME; 
 const REGION = process.env.AWS_REGION; 
 
-// 必須環境変数が設定されているか確認 (起動時チェックは維持)
+// 必須環境変数が設定されているか確認し、未設定の場合は起動を停止
 if (!OPENAI_API_KEY || !S3_BUCKET_NAME || !REGION) {
-    console.error("🚨 致命的なエラー: 環境変数が設定されていません。'.env'ファイルを確認してください。");
-    if (!OPENAI_API_KEY) console.error(" - OPENAI_API_KEYが不足");
-    if (!S3_BUCKET_NAME) console.error(" - S3_BUCKET_NAMEが不足");
-    if (!REGION) console.error(" - AWS_REGIONが不足");
+    console.error("🚨 致命的なエラー: 以下の環境変数が設定されていません。アプリケーションを終了します。");
+    if (!OPENAI_API_KEY) console.error(" - OPENAI_API_KEY");
+    if (!S3_BUCKET_NAME) console.error(" - S3_BUCKET_NAME");
+    if (!REGION) console.error(" - AWS_REGION");
+    console.error("Docker環境または'.env'ファイルを確認してください。");
     process.exit(1);
 }
 
@@ -53,7 +50,7 @@ app.use(session({
 }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ユーザー認証ロジック
+// ユーザー認証ロジック (変更なし)
 let usersData = [];
 const usersFilePath = path.join(__dirname, 'users.json');
 
@@ -124,7 +121,7 @@ app.post('/set-task', (req, res) => {
     res.status(400).json({ message: '無効な課題番号です' });
 });
 
-// S3 ロギングとコードロード エンドポイント 
+// S3 ロギングとコードロード エンドポイント
 app.post('/upload', (req, res) => {
     if (!req.session.user) { return res.status(401).json({ message: '認証されていません' }); }
     const { key, body } = req.body;
@@ -162,6 +159,68 @@ app.get('/load_latest_code', (req, res) => {
     });
 });
 
+// コード実行エンドポイント
+app.post('/run-code', async (req, res) => {
+    if (!req.session.user) {
+        return res.status(401).json({ message: '認証されていません' });
+    }
+
+    const { code, language, stdin, taskNumber } = req.body;
+    const userId = req.session.user.userId;
+    const PISTON_API_URL = "https://emkc.org/api/v2/piston/execute";
+    if (taskNumber) {
+        req.session.user.taskNumber = taskNumber;
+    }
+
+    try {
+        const response = await fetch(PISTON_API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                language: language,
+                version: "10.2.0",
+                files: [{ content: code }],
+                stdin: stdin
+            })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(`API Error: ${response.status} - ${JSON.stringify(errorData)}`);
+        }
+
+        const data = await response.json();
+        res.json(data);
+        
+        // 実行ログをS3に保存
+        const logData = {
+            timestamp: new Date().toISOString(),
+            username: req.session.user.username,
+            userId: userId,
+            taskNumber: req.session.user.taskNumber,
+            event: 'run',
+            code: code,
+            stdout: data.run?.stdout,
+            stderr: data.run?.stderr,
+        };
+        const logKey = `task_${req.session.user.taskNumber}/${logData.timestamp}_${logData.event}.json`;
+        s3.upload({
+            Bucket: S3_BUCKET_NAME,
+            Key: `log/${userId}/${logKey}`,
+            Body: JSON.stringify(logData, null, 2),
+            ContentType: 'application/json'
+        }, (err) => {
+            if (err) console.error('実行ログのS3保存に失敗:', err);
+        });
+    } catch (error) {
+        console.error('コード実行に失敗しました:', error);
+        res.status(500).json({
+            error: 'コードの実行に失敗しました。',
+            details: error.message
+        });
+    }
+});
+
 // AI HELP エンドポイント (プロンプトファイルを呼び出し時に読み込む)
 app.post('/ai-advice', async (req, res) => {
     if (!req.session.user) {
@@ -170,14 +229,15 @@ app.post('/ai-advice', async (req, res) => {
 
     const { task, studentCode, taskNumber, hintsUsed } = req.body;
     
-    // ★ 修正点 2: リクエストが来るたびにファイルを非同期で読み込む ★
+    // リクエストが来るたびにファイルを非同期で読み込む
     let PROMPT_TEMPLATE;
     try {
         const PROMPT_TEMPLATE_PATH = path.join(__dirname, 'prompt_template.txt');
+        // Docker環境では非同期I/Oが原因でエラーが出ることが少ないため、fsPromisesを使用
         PROMPT_TEMPLATE = (await fsPromises.readFile(PROMPT_TEMPLATE_PATH, 'utf8')).trim();
     } catch (error) {
         console.error(`🚨 プロンプトファイルのロードエラー: ${error.message}`);
-        return res.status(500).json({ error: 'AIサービスのプロンプト設定ファイルを読み込めません。' });
+        return res.status(500).json({ error: 'AIサービスのプロンプト設定ファイル（prompt_template.txt）を読み込めません。' });
     }
     
     // テンプレートの動的な値を置換して最終プロンプトを構築
