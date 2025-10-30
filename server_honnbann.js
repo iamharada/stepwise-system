@@ -1,8 +1,3 @@
-// server.js
-// プロンプトを外部ファイルに分離し、呼び出し時に読み込むようにすることで、
-// プロンプトの更新を容易にし、サーバーの再起動なしで変更を反映できるようにした。
-// 本番環境では、事前にプロンプトファイルを読み込んでおく方法（server_honbann.js）を採用する。
-
 const express = require('express');
 const AWS = require('aws-sdk');
 const fetch = require('node-fetch');
@@ -11,19 +6,29 @@ const path = require('path');
 const session = require('express-session');
 const fs = require('fs');
 const bcrypt = require('bcrypt');
-const fsPromises = require('fs/promises'); // fs/promises をインポート
-
 require('dotenv').config(); 
 
 const app = express();
 const port = 3000;
+
+// プロンプトテンプレートを起動時に読み込む ★
+const PROMPT_TEMPLATE_PATH = path.join(__dirname, 'prompt_template.txt');
+let PROMPT_TEMPLATE;
+try {
+    PROMPT_TEMPLATE = fs.readFileSync(PROMPT_TEMPLATE_PATH, 'utf8').trim();
+    console.log(`プロンプトテンプレートを ${PROMPT_TEMPLATE_PATH} からロードしました。`);
+} catch (error) {
+    console.error(`🚨 プロンプトファイルのロードエラー: ${error.message}`);
+    console.error("アプリケーションを終了します。'prompt_template.txt'がルートディレクトリに存在するか確認してください。");
+    process.exit(1);
+}
 
 // S3とAWSの環境設定
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const S3_BUCKET_NAME = process.env.S3_BUCKET_NAME; 
 const REGION = process.env.AWS_REGION; 
 
-// 必須環境変数が設定されているか確認 (起動時チェックは維持)
+// 必須環境変数が設定されているか確認
 if (!OPENAI_API_KEY || !S3_BUCKET_NAME || !REGION) {
     console.error("🚨 致命的なエラー: 環境変数が設定されていません。'.env'ファイルを確認してください。");
     if (!OPENAI_API_KEY) console.error(" - OPENAI_API_KEYが不足");
@@ -35,7 +40,7 @@ if (!OPENAI_API_KEY || !S3_BUCKET_NAME || !REGION) {
 // S3クライアントを初期化
 const s3 = new AWS.S3({ region: REGION });
 
-// CORS設定とミドルウェア
+// CORS設定
 app.use(cors({
     origin: 'http://localhost:3000',
     credentials: true
@@ -86,7 +91,7 @@ try {
     }
 }
 
-// 認証エンドポイント
+// 認証エンドポイント (変更なし)
 app.post('/login', async (req, res) => {
     const { username, password } = req.body;
     const user = usersData.find(u => u.username === username);
@@ -100,7 +105,9 @@ app.post('/login', async (req, res) => {
 
 app.post('/logout', (req, res) => {
     req.session.destroy(err => {
-        if (err) { return res.status(500).json({ message: 'ログアウトに失敗しました' }); }
+        if (err) {
+            return res.status(500).json({ message: 'ログアウトに失敗しました' });
+        }
         res.clearCookie('connect.sid');
         res.json({ message: 'ログアウト成功' });
     });
@@ -115,7 +122,9 @@ app.get('/session', (req, res) => {
 });
 
 app.post('/set-task', (req, res) => {
-    if (!req.session.user) { return res.status(401).json({ message: '認証されていません' }); }
+    if (!req.session.user) {
+        return res.status(401).json({ message: '認証されていません' });
+    }
     const { taskNumber } = req.body;
     if (taskNumber) {
         req.session.user.taskNumber = taskNumber;
@@ -124,12 +133,15 @@ app.post('/set-task', (req, res) => {
     res.status(400).json({ message: '無効な課題番号です' });
 });
 
-// S3 ロギングとコードロード エンドポイント 
+// S3 ロギングとコードロード 
 app.post('/upload', (req, res) => {
-    if (!req.session.user) { return res.status(401).json({ message: '認証されていません' }); }
+    if (!req.session.user) {
+        return res.status(401).json({ message: '認証されていません' });
+    }
     const { key, body } = req.body;
     const userId = req.session.user.userId;
     const s3Key = `log/${userId}/${key}`;
+    // ... (S3 upload logic) ...
     const params = { Bucket: S3_BUCKET_NAME, Key: s3Key, Body: body, ContentType: 'application/json' };
     s3.upload(params, (err, data) => {
         if (err) { console.error('S3へのアップロードに失敗しました:', err); return res.status(500).send('サーバーエラー: アップロード失敗'); }
@@ -143,6 +155,7 @@ app.get('/load_latest_code', (req, res) => {
     const userId = req.session.user.userId;
     const taskNumber = req.query.taskNumber;
     const prefix = `log/${userId}/task_${taskNumber}/`;
+    // ... (S3 load logic) ...
     const params = { Bucket: S3_BUCKET_NAME, Prefix: prefix };
     s3.listObjectsV2(params, (err, data) => {
         if (err || !data.Contents || data.Contents.length === 0) { return res.status(404).json({ message: '保存されたコードが見つかりません。' }); }
@@ -162,23 +175,13 @@ app.get('/load_latest_code', (req, res) => {
     });
 });
 
-// AI HELP エンドポイント (プロンプトファイルを呼び出し時に読み込む)
+// AI HELP エンドポイント (プロンプト生成ロジックを修正)
 app.post('/ai-advice', async (req, res) => {
     if (!req.session.user) {
         return res.status(401).json({ message: '認証されていません' });
     }
 
     const { task, studentCode, taskNumber, hintsUsed } = req.body;
-    
-    // ★ 修正点 2: リクエストが来るたびにファイルを非同期で読み込む ★
-    let PROMPT_TEMPLATE;
-    try {
-        const PROMPT_TEMPLATE_PATH = path.join(__dirname, 'prompt_template.txt');
-        PROMPT_TEMPLATE = (await fsPromises.readFile(PROMPT_TEMPLATE_PATH, 'utf8')).trim();
-    } catch (error) {
-        console.error(`🚨 プロンプトファイルのロードエラー: ${error.message}`);
-        return res.status(500).json({ error: 'AIサービスのプロンプト設定ファイルを読み込めません。' });
-    }
     
     // テンプレートの動的な値を置換して最終プロンプトを構築
     const finalPrompt = PROMPT_TEMPLATE
@@ -197,7 +200,7 @@ app.post('/ai-advice', async (req, res) => {
             },
             body: JSON.stringify({
                 model: MODEL,
-                messages: [{ role: "user", content: finalPrompt }], 
+                messages: [{ role: "user", content: finalPrompt }], // 構築したプロンプトを使用
                 response_format: { type: "json_object" }
             })
         });
