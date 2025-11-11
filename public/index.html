@@ -169,7 +169,11 @@
             <span class="bg-gray-200 text-gray-700 font-bold py-1 px-3 rounded-full">3. 検証</span>
           </div>
         </div>
-        <p class="text-center text-xs mt-2 text-gray-500">現在: <span id="current-phase" class="font-semibold">---</span></p>
+        <p class="text-center text-xs mt-2 text-gray-500">
+            現在: <span id="current-phase" class="font-semibold">---</span>
+            <span class="ml-4 text-gray-400">|</span> 
+            次のプロセス: <span id="next-phase" class="font-bold text-indigo-600">---</span> 
+        </p>
       </div>
 
       <div class="bg-white p-4 rounded-lg shadow-md">
@@ -242,6 +246,7 @@
   const loaderContainer = document.getElementById('loader-container');
   const processingStructure = document.getElementById('processing-structure');
   const currentPhaseEl = document.getElementById('current-phase');
+  const nextPhaseEl = document.getElementById('next-phase');
 
   const taskSelector = document.getElementById('task-selector');
   const taskDescriptionContainer = document.getElementById('task-description-container');
@@ -703,6 +708,7 @@ int main(void) {
 
   const AdviceSchema = {
     estimated_stage: ['課題の理解','処理の大枠決定','処理の詳細化','コード化','コードの整合性確認'],
+    next_stage: ['課題の理解','処理の大枠決定','処理の詳細化','コード化','コードの整合性確認'],
     processing_structure: {
       status: ['done','in_progress','todo']
     }
@@ -712,6 +718,9 @@ int main(void) {
     if (!d || typeof d !== 'object') throw new Error('JSONが空です');
     if (!AdviceSchema.estimated_stage.includes(d.estimated_stage)) {
       throw new Error('estimated_stage がスキーマ外です');
+    }
+    if (!AdviceSchema.next_stage.includes(d.next_stage)) {
+      throw new Error('next_stage がスキーマ外です');
     }
     if (!Array.isArray(d.processing_structure)) throw new Error('processing_structure が配列ではありません');
     d.processing_structure.forEach((it, idx) => {
@@ -850,6 +859,7 @@ int main(void) {
       renderAdvice(adviceData.advice || []);
       renderProcessingStructure(adviceData.processing_structure || []);
       currentPhaseEl.textContent = adviceData.estimated_stage || '---';
+      nextPhaseEl.textContent = adviceData.next_stage || '---';
       updateProcessVisualizer(adviceData.estimated_stage);
       aiAdviceContainer.classList.remove('hidden');
       showToast('アドバイスを更新しました');

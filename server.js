@@ -279,6 +279,7 @@ app.post('/ai-advice', async (req, res) => {
         }
 
         // AI HELPログをS3に保存
+        // AI HELPログをS3に保存
         const logData = {
             timestamp: new Date().toISOString(),
             username: req.session.user.username,
@@ -287,6 +288,7 @@ app.post('/ai-advice', async (req, res) => {
             event: 'ai-help',
             code: studentCode,
             estimated_stage: adviceResponse.estimated_stage,
+            next_stage: adviceResponse.next_stage, 
             processing_structure: adviceResponse.processing_structure,
             advice: adviceResponse.advice,
             hintsUsed: hintsUsed,
